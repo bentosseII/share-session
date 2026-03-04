@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Session Preview</title>
+  <style>
+    :root {
+      /* Factory Design System - Tungsten Dark Theme */
+      --bg: #282C34;
+      --bg-secondary: #21252B;
+      --text: #f2f0f0;
+      --text-secondary: #b3a9a4;
+      --muted: #80756f;
+      --dim: #59514d;
+      --accent: #d56a26;
+      --accent-light: #ffa469;
+      --success: #5b8e63;
+      --error: #d9363e;
+      --border: #342f2d;
+      --border-light: #a89895;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+      font-size: 12px;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .loading, .error-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading p { color: var(--muted); }
+    .error-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2rem;
+      max-width: 400px;
+      text-align: center;
+    }
+    .error-icon {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 1rem;
+      background: rgba(217, 54, 62, 0.15);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--error);
+      font-size: 18px;
+    }
+    .error-box h1 {
+      font-size: 13px;
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+    }
+    .error-box p { color: var(--muted); font-size: 11px; }
+    .error-box a {
+      display: inline-block;
+      margin-top: 1rem;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .error-box a:hover { color: var(--accent-light); }
+    iframe {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: var(--bg);
+    }
+    .hidden { display: none !important; }
+
+    /* Session list */
+    .session-list {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .session-list h1 {
+      font-size: 14px;
+      color: var(--accent);
+      margin-bottom: 0.35rem;
+      font-weight: bold;
+    }
+    .session-list .subtitle {
+      color: var(--muted);
+      margin-bottom: 1.5rem;
+      font-size: 11px;
+    }
+    .session-item {
+      display: block;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.875rem 1rem;
+      margin-bottom: 0.5rem;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .session-item:hover {
+      border-color: var(--accent);
+      background: rgba(213, 106, 38, 0.08);
+    }
+    .session-title {
+      font-weight: bold;
+      font-size: 12px;
+      margin-bottom: 0.25rem;
+    }
+    .session-meta {
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      gap: 1rem;
+    }
+    .session-date { color: var(--dim); }
+    .session-files { color: var(--dim); }
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: var(--muted);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p id="loading-text">Loading session...</p>
+  </div>
+  <div id="error" class="error-container hidden">
+    <div class="error-box">
+      <div class="error-icon">✕</div>
+      <h1>Failed to load session</h1>
+      <p id="error-message">Session not found</p>
+      <a href="/">← Back</a>
+    </div>
+  </div>
+  <div id="list" class="session-list hidden">
+    <h1>Shared Sessions</h1>
+    <p class="subtitle">Droid conversation exports</p>
+    <div id="sessions"></div>
+  </div>
+  <iframe id="viewer" class="hidden"></iframe>
+
+  <script>
+    const GITHUB_USERNAME = 'bentossell';
+    
+    const params = new URLSearchParams(location.search);
+    const gistId = params.keys().next().value || location.hash.slice(1);
+    const targetId = params.get('target');
+    const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loading-text');
+    const error = document.getElementById('error');
+    const errorMsg = document.getElementById('error-message');
+    const viewer = document.getElementById('viewer');
+    const list = document.getElementById('list');
+    const sessions = document.getElementById('sessions');
+
+    function showError(msg) {
+      loading.classList.add('hidden');
+      errorMsg.textContent = msg;
+      error.classList.remove('hidden');
+    }
+
+    function formatDate(dateStr) {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    if (!gistId) {
+      // Show session list via server-side API (supports private gists)
+      loadingText.textContent = 'Loading sessions...';
+      
+      fetch('/api/gists')
+        .then(r => {
+          if (!r.ok) throw new Error('Failed to fetch sessions');
+          return r.json();
+        })
+        .then(sessionGists => {
+          if (sessionGists.error) throw new Error(sessionGists.error);
+          
+          loading.classList.add('hidden');
+          list.classList.remove('hidden');
+          
+          if (sessionGists.length === 0) {
+            sessions.innerHTML = '<div class="empty-state">No shared sessions yet</div>';
+            return;
+          }
+          
+          sessions.innerHTML = sessionGists.map(g => {
+            const title = g.description || 'Untitled Session';
+            const date = formatDate(g.created_at);
+            const fileCount = g.files;
+            return `<a href="?${g.id}" class="session-item">
+              <div class="session-title">${title}</div>
+              <div class="session-meta">
+                <span class="session-date">${date}</span>
+                <span>${fileCount} files</span>
+              </div>
+            </a>`;
+          }).join('');
+        })
+        .catch(err => {
+          showError(err.message);
+        });
+    } else {
+      // Load specific session
+      fetch('https://api.github.com/gists/' + gistId)
+        .then(r => {
+          if (!r.ok) throw new Error('Session not found');
+          return r.json();
+        })
+        .then(gist => {
+          const htmlFile = Object.values(gist.files).find(f => f.filename.endsWith('.html'));
+          if (!htmlFile) throw new Error('No HTML file in gist');
+          if (htmlFile.truncated && htmlFile.raw_url) {
+            return fetch(htmlFile.raw_url).then(r => r.text());
+          }
+          return htmlFile.content;
+        })
+        .then(html => {
+          loading.classList.add('hidden');
+          viewer.classList.remove('hidden');
+          viewer.srcdoc = html;
+          // Focus iframe when loaded so keyboard shortcuts work
+          viewer.onload = () => {
+            viewer.contentWindow.focus();
+            // Forward keyboard events from parent to iframe via exposed functions
+            document.addEventListener('keydown', (e) => {
+              if (e.ctrlKey && e.key === 't') {
+                e.preventDefault();
+                if (viewer.contentWindow.toggleThinking) viewer.contentWindow.toggleThinking();
+              } else if (e.ctrlKey && e.key === 'o') {
+                e.preventDefault();
+                if (viewer.contentWindow.toggleToolOutputs) viewer.contentWindow.toggleToolOutputs();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                if (viewer.contentWindow.resetFilters) viewer.contentWindow.resetFilters();
+              }
+            });
+            // Handle deep linking - scroll to target message if specified
+            if (targetId) {
+              const target = viewer.contentDocument.getElementById(targetId);
+              if (target) {
+                setTimeout(() => {
+                  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  target.classList.add('highlight');
+                }, 200);
+              }
+            }
+          };
+        })
+        .catch(err => {
+          showError(err.message);
+        });
+    }
+  </script>
+</body>
+</html>
